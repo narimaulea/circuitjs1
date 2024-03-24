@@ -189,7 +189,7 @@ class ThreePhaseMotorElm extends CircuitElm {
         }
         
         double torque = Zp * Math.sqrt(3)/2 * Lm * ((coilCurrents[1]-coilCurrents[2]) * coilCurrents[3] - Math.sqrt(3) * coilCurrents[0] * coilCurrents[4]);
-	speed += sim.timeStep * (torque/J - b * speed);
+	speed += sim.timeStep * (torque- b * speed)/J ;
         angle = angle + speed*sim.timeStep;
 
         vs1value = -Zp*speed*(Lm*Math.sqrt(3)/2 * (coilCurrents[1]-coilCurrents[2]) + 1.5*Lr*coilCurrents[4]);
