@@ -100,75 +100,100 @@ class ThreePhaseMotorElm extends CircuitElm {
     
     // based on https://forum.kicad.info/t/ac-motors-simulation-1-phase-3-phase/14188/3
     
-    void stamp() {
-	int i;
-	
-	int n001 = nodes[n001_ind];
-	int n002 = nodes[n002_ind];
-	int n003 = nodes[n003_ind];
-	int n004 = nodes[n004_ind];
-	int n005 = nodes[n005_ind];
-	int n006 = nodes[n006_ind];
-	int n007 = nodes[n007_ind];
+    class ThreePhaseMotorElm extends CircuitElm {
+    double Rs, Rr, Ls, Lr, Lm;
+    double b;
+    public double angle;
+    public double speed;
 
-	sim.stampResistor(nodes[0], n001, Rs);
-	sim.stampResistor(nodes[2], n003, Rs);
-	sim.stampResistor(nodes[4], n005, Rs);
-	sim.stampResistor(n004, 0, 1.5*Rr);
-	sim.stampResistor(n007, 0, 1.5*Rr);
-	
-	double Lr2 = Lr*1.5;
-	double coilInductances[] = { Ls, Ls, Ls, Lr2, Lr2 };
-	double couplingCoefs[][] = new double[coilCount][coilCount];
-        xformMatrix = new double[coilCount][coilCount];
-
-        // see CustomTransformerElm.java
-        
-        // fill diagonal
-        for (i = 0; i != coilCount; i++)
-            xformMatrix[i][i] = coilInductances[i];
-        
-	double k0 = Lm/Math.sqrt(Ls*Lr2);
-        couplingCoefs[0][3] = couplingCoefs[3][0] = k0;
-        couplingCoefs[1][3] = couplingCoefs[3][1] = -k0/2;
-        couplingCoefs[1][4] = couplingCoefs[4][1] = k0*Math.sqrt(3)/2;
-        couplingCoefs[2][3] = couplingCoefs[3][2] = -k0/2;
-        couplingCoefs[2][4] = couplingCoefs[4][2] = -k0*Math.sqrt(3)/2;
-                
-        int j;
-        // fill off-diagonal
-        for (i = 0; i != coilCount; i++)
-            for (j = 0; j != i; j++)
-                xformMatrix[i][j] = xformMatrix[j][i] = couplingCoefs[i][j]*Math.sqrt(coilInductances[i]*coilInductances[j]);
-	
-        CirSim.invertMatrix(xformMatrix, coilCount);
-
-        double ts = sim.timeStep;
-        for (i = 0; i != coilCount; i++)
-            for (j = 0; j != coilCount; j++) {
-                // multiply in dt/2 (or dt for backward euler)
-                xformMatrix[i][j] *= ts;
-                int ni1 = coilNodes[i*2];
-                int nj1 = coilNodes[j*2];
-                int ni2 = coilNodes[i*2+1];
-                int nj2 = coilNodes[j*2+1];
-                if (i == j)
-                    sim.stampConductance(nodes[ni1], nodes[ni2], xformMatrix[i][i]);
-                else
-                    sim.stampVCCurrentSource(nodes[ni1], nodes[ni2], nodes[nj1], nodes[nj2], xformMatrix[i][j]);
-            }
-        for (i = 0; i != 10; i++)
-            sim.stampRightSide(nodes[coilNodes[i]]);
-        
-        sim.stampVoltageSource(n002, 0, voltSources[0]);
-        sim.stampVoltageSource(n006, 0, voltSources[1]);
-        
-        coilCurSourceValues = new double[coilCount];
-        coilCurrents = new double[coilCount];
-        
-        int nodeCount = getPostCount() + getInternalNodeCount();
-        nodeCurrents = new double[nodeCount];
+    double coilCurrent;
+    double inertiaCurrent;
+    double curcounts[];
+    double J;
+    
+    final int coilCount = 6; // 3 del estator + 3 del rotor
+    double xformMatrix[][] = new double[coilCount][coilCount];
+    double coilInductances[] = new double[coilCount];
+    double couplingCoefs[][] = new double[coilCount][coilCount];
+    
+    public ThreePhaseMotorElm(int xx, int yy) { 
+        super(xx, yy); 
+        Rs = 0.435;
+        Rr = 0.816;
+        Ls = 0.0294;
+        Lr = 0.0297;
+        Lm = 0.0287;
+        J = 1;
+        angle = Math.PI / 2; 
+        speed = 0;
+        b = 0.05;
     }
+
+    void setupInductanceMatrix() {
+        double Ls_auto = Ls + Lm;
+        double Lr_auto = Lr + Lm;
+        double Mss = -0.5 * Lm;
+        double Mrr = -0.5 * Lm;
+        double Msr = Lm;
+        
+        // Matriz de inductancia L
+        for (int i = 0; i < coilCount; i++) {
+            for (int j = 0; j < coilCount; j++) {
+                xformMatrix[i][j] = 0; // Inicializamos en 0
+            }
+        }
+        
+        // Auto-inductancias
+        xformMatrix[0][0] = Ls_auto;
+        xformMatrix[1][1] = Ls_auto;
+        xformMatrix[2][2] = Ls_auto;
+        xformMatrix[3][3] = Lr_auto;
+        xformMatrix[4][4] = Lr_auto;
+        xformMatrix[5][5] = Lr_auto;
+        
+        // Acoplamientos entre fases del estator
+        xformMatrix[0][1] = xformMatrix[1][0] = Mss;
+        xformMatrix[0][2] = xformMatrix[2][0] = Mss;
+        xformMatrix[1][2] = xformMatrix[2][1] = Mss;
+        
+        // Acoplamientos entre fases del rotor
+        xformMatrix[3][4] = xformMatrix[4][3] = Mrr;
+        xformMatrix[3][5] = xformMatrix[5][3] = Mrr;
+        xformMatrix[4][5] = xformMatrix[5][4] = Mrr;
+        
+        // Acoplamientos entre estator y rotor con dependencia angular
+        double theta = angle;
+        xformMatrix[0][3] = xformMatrix[3][0] = Msr * Math.cos(theta);
+        xformMatrix[0][4] = xformMatrix[4][0] = Msr * Math.cos(theta - 2 * Math.PI / 3);
+        xformMatrix[0][5] = xformMatrix[5][0] = Msr * Math.cos(theta + 2 * Math.PI / 3);
+        xformMatrix[1][3] = xformMatrix[3][1] = Msr * Math.cos(theta + 2 * Math.PI / 3);
+        xformMatrix[1][4] = xformMatrix[4][1] = Msr * Math.cos(theta);
+        xformMatrix[1][5] = xformMatrix[5][1] = Msr * Math.cos(theta - 2 * Math.PI / 3);
+        xformMatrix[2][3] = xformMatrix[3][2] = Msr * Math.cos(theta - 2 * Math.PI / 3);
+        xformMatrix[2][4] = xformMatrix[4][2] = Msr * Math.cos(theta + 2 * Math.PI / 3);
+        xformMatrix[2][5] = xformMatrix[5][2] = Msr * Math.cos(theta);
+    }
+
+    void stamp() {
+        setupInductanceMatrix();
+        CirSim.invertMatrix(xformMatrix, coilCount);
+        
+        for (int i = 0; i < coilCount; i++) {
+            for (int j = 0; j < coilCount; j++) {
+                xformMatrix[i][j] *= sim.timeStep;
+                int ni1 = i * 2;
+                int nj1 = j * 2;
+                int ni2 = i * 2 + 1;
+                int nj2 = j * 2 + 1;
+                if (i == j) {
+                    sim.stampConductance(nodes[ni1], nodes[ni2], xformMatrix[i][i]);
+                } else {
+                    sim.stampVCCurrentSource(nodes[ni1], nodes[ni2], nodes[nj1], nodes[nj2], xformMatrix[i][j]);
+                }
+            }
+        }
+    }
+}
     
     int coilNodes[] = { n001_ind, 1, n003_ind, 3, n005_ind, 5, n002_ind, n004_ind, n006_ind, n007_ind };
     double coilCurrents[];
