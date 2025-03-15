@@ -101,6 +101,19 @@ class ThreePhaseMotorElm extends CircuitElm {
     // based on https://forum.kicad.info/t/ac-motors-simulation-1-phase-3-phase/14188/3
     
     void stamp() {
+
+	// Calcular la velocidad síncrona (en rad/s)
+    double synchronousSpeed = 2 * Math.PI * 60 / Zp; // Para un motor de 60 Hz
+
+    // Calcular el deslizamiento
+    double slip = calculateSlip(speed, synchronousSpeed);
+
+    // Ajustar la inductancia y resistencia del rotor en función del deslizamiento
+    double LrAdjusted = adjustRotorInductance(Lr, slip);
+
+    // Usar los valores ajustados
+    double Lr2 = LrAdjusted * 1.5;
+		
 	int i;
 	
 	int n001 = nodes[n001_ind];
@@ -117,7 +130,7 @@ class ThreePhaseMotorElm extends CircuitElm {
 	sim.stampResistor(n004, 0, 1.5*Rr);
 	sim.stampResistor(n007, 0, 1.5*Rr);
 	
-	double Lr2 = Lr*1.5;
+	//double Lr2 = Lr*1.5;
 	double coilInductances[] = { Ls, Ls, Ls, Lr2, Lr2 };
 	double couplingCoefs[][] = new double[coilCount][coilCount];
         xformMatrix = new double[coilCount][coilCount];
@@ -180,21 +193,59 @@ class ThreePhaseMotorElm extends CircuitElm {
     void setVoltageSource(int n, int v) { voltSources[n] = v; }
     
     double vs1value, vs2value;
-
+	
+	double calculateSlip(double speed, double synchronousSpeed) {
+		return (synchronousSpeed - speed) / synchronousSpeed;
+	}
+	double adjustRotorInductance(double Lr, double slip) {
+	    // Reducir la inductancia del rotor a medida que el deslizamiento aumenta
+	    return Lr / (1 + slip);
+	}
+	
+	double adjustRotorResistance(double Rr, double slip) {
+	    // Aumentar la resistencia del rotor a medida que el deslizamiento aumenta
+	    return Rr * (1 + slip);
+	}
     void startIteration() {
-        int i;
-        for (i = 0; i != coilCount; i++) {
-            double val = coilCurrents[i];
-            coilCurSourceValues[i] = val;
-        }
-        
-        double torque = Zp * Math.sqrt(3)/2 * Lm * ((coilCurrents[1]-coilCurrents[2]) * coilCurrents[3] - Math.sqrt(3) * coilCurrents[0] * coilCurrents[4]);
-	speed += sim.timeStep * (torque - b * speed)/J;
-        angle = angle + speed*sim.timeStep;
+	    // Calcular la velocidad síncrona (en rad/s)
+	    double synchronousSpeed = 2 * Math.PI * 60 / Zp; // Para un motor de 60 Hz
+	
+	    // Calcular el deslizamiento
+	    double slip = calculateSlip(speed, synchronousSpeed);
+	
+	    // Ajustar la inductancia y resistencia del rotor en función del deslizamiento
+	    double LrAdjusted = adjustRotorInductance(Lr, slip);
 
-        vs1value = -Zp*speed*(Lm*Math.sqrt(3)/2 * (coilCurrents[1]-coilCurrents[2]) + 1.5*Lr*coilCurrents[4]);
-        vs2value = Zp*speed*(3/2.*Lm*coilCurrents[0] + 1.5*Lr*coilCurrents[3]);
-    }
+	
+	    // Usar los valores ajustados en los cálculos
+	    double Lr2 = LrAdjusted * 1.5;
+
+	
+	    // Recalcular los coeficientes de acoplamiento (sin dependencia del ángulo)
+	    double k0 = Lm / Math.sqrt(Ls * Lr2);
+	
+	    couplingCoefs[0][3] = couplingCoefs[3][0] = k0;
+	    couplingCoefs[1][3] = couplingCoefs[3][1] = -k0 / 2;
+	    couplingCoefs[1][4] = couplingCoefs[4][1] = k0 * Math.sqrt(3) / 2;
+	    couplingCoefs[2][3] = couplingCoefs[3][2] = -k0 / 2;
+	    couplingCoefs[2][4] = couplingCoefs[4][2] = -k0 * Math.sqrt(3) / 2;
+	
+	    // Recalcular la matriz de transformación
+	    for (int i = 0; i != coilCount; i++) {
+	        for (int j = 0; j != i; j++) {
+	            xformMatrix[i][j] = xformMatrix[j][i] = couplingCoefs[i][j] * Math.sqrt(coilInductances[i] * coilInductances[j]);
+	        }
+	    }
+	
+	    // Calcular el torque y actualizar la velocidad y el ángulo
+	    double torque = Zp * Math.sqrt(3) / 2 * Lm * ((coilCurrents[1] - coilCurrents[2]) * coilCurrents[3] - Math.sqrt(3) * coilCurrents[0] * coilCurrents[4]);
+	    speed += sim.timeStep * (torque - b * speed) / J;
+	    angle = angle + speed * sim.timeStep;
+	
+	    // Actualizar las fuentes de voltaje
+	    vs1value = -Zp * speed * (Lm * Math.sqrt(3) / 2 * (coilCurrents[1] - coilCurrents[2]) + 1.5 * LrAdjusted * coilCurrents[4]);
+	    vs2value = Zp * speed * (3 / 2.0 * Lm * coilCurrents[0] + 1.5 * LrAdjusted * coilCurrents[3]);
+	}
     
     void doStep() {
         int i;
